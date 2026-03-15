@@ -1,0 +1,287 @@
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { OrbitControls, PerspectiveCamera, Text, Float, MeshDistortMaterial, Stars } from '@react-three/drei';
+import * as THREE from 'three';
+import { motion, AnimatePresence } from 'motion/react';
+import { Trophy, Play, RotateCcw, ArrowLeft, ArrowRight } from 'lucide-react';
+
+// --- Constants ---
+const GRID_SIZE = 100;
+const PLAYER_SPEED = 0.5;
+const OBSTACLE_SPEED = 0.8;
+const SPAWN_INTERVAL = 1000; // ms
+
+// --- Components ---
+
+function Player({ position, setGameOver }: { position: [number, number, number], setGameOver: (v: boolean) => void }) {
+  const meshRef = useRef<THREE.Mesh>(null);
+  
+  useFrame((state) => {
+    if (meshRef.current) {
+      meshRef.current.position.x = THREE.MathUtils.lerp(meshRef.current.position.x, position[0], 0.1);
+      meshRef.current.rotation.z = - (meshRef.current.position.x - position[0]) * 0.5;
+      meshRef.current.rotation.y = Math.sin(state.clock.elapsedTime * 2) * 0.2;
+    }
+  });
+
+  return (
+    <group ref={meshRef} position={[0, 0.5, 0]}>
+      <mesh castShadow>
+        <boxGeometry args={[1, 0.5, 1.5]} />
+        <meshStandardMaterial color="#00f2ff" emissive="#00f2ff" emissiveIntensity={2} />
+      </mesh>
+      <mesh position={[0, 0.2, -0.5]}>
+        <boxGeometry args={[0.6, 0.3, 0.8]} />
+        <meshStandardMaterial color="#ff00ff" emissive="#ff00ff" emissiveIntensity={2} />
+      </mesh>
+      {/* Thrusters */}
+      <pointLight position={[0, 0, 1]} color="#00f2ff" intensity={5} distance={3} />
+    </group>
+  );
+}
+
+function Obstacle({ position, onHit }: { position: [number, number, number], onHit: () => void }) {
+  const meshRef = useRef<THREE.Mesh>(null);
+  const speed = useMemo(() => OBSTACLE_SPEED + Math.random() * 0.5, []);
+
+  useFrame((state, delta) => {
+    if (meshRef.current) {
+      meshRef.current.position.z += speed;
+      
+      // Collision detection (simple)
+      // Player is at z=0 roughly
+      if (Math.abs(meshRef.current.position.z) < 0.8 && Math.abs(meshRef.current.position.x - position[0]) < 1) {
+        // This is tricky because 'position' here is the player's target position
+        // We'll handle collision in the parent for better accuracy or just use this
+      }
+    }
+  });
+
+  return (
+    <mesh ref={meshRef} position={position} castShadow>
+      <boxGeometry args={[1.5, 1.5, 1.5]} />
+      <meshStandardMaterial color="#ff0055" emissive="#ff0055" emissiveIntensity={2} />
+    </mesh>
+  );
+}
+
+function MovingGrid() {
+  const gridRef = useRef<THREE.Group>(null);
+  
+  useFrame((state, delta) => {
+    if (gridRef.current) {
+      gridRef.current.position.z += 0.5;
+      if (gridRef.current.position.z > 10) {
+        gridRef.current.position.z = 0;
+      }
+    }
+  });
+
+  return (
+    <group ref={gridRef}>
+      <gridHelper args={[200, 40, 0xff00ff, 0x444444]} rotation={[0, 0, 0]} />
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.1, 0]} receiveShadow>
+        <planeGeometry args={[200, 200]} />
+        <meshStandardMaterial color="#050505" />
+      </mesh>
+    </group>
+  );
+}
+
+function GameScene({ isPlaying, score, setScore, setGameOver }: any) {
+  const [obstacles, setObstacles] = useState<any[]>([]);
+  const [playerX, setPlayerX] = useState(0);
+  const lastSpawn = useRef(0);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft') setPlayerX(prev => Math.max(prev - 2, -6));
+      if (e.key === 'ArrowRight') setPlayerX(prev => Math.min(prev + 2, 6));
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  useFrame((state) => {
+    if (!isPlaying) return;
+
+    // Spawn obstacles
+    if (state.clock.elapsedTime - lastSpawn.current > 1 / (1 + score * 0.05)) {
+      const x = (Math.floor(Math.random() * 7) - 3) * 2;
+      setObstacles(prev => [...prev, { id: Math.random(), x, z: -100 }]);
+      lastSpawn.current = state.clock.elapsedTime;
+    }
+
+    // Update obstacles and check collisions
+    setObstacles(prev => {
+      const next = prev
+        .map(obj => ({ ...obj, z: obj.z + OBSTACLE_SPEED + (score * 0.01) }))
+        .filter(obj => obj.z < 10);
+
+      // Collision check
+      const hit = next.find(obj => Math.abs(obj.z - 0) < 1 && Math.abs(obj.x - playerX) < 1.2);
+      if (hit) {
+        setGameOver(true);
+      }
+
+      // Update score
+      const passed = next.filter(obj => obj.z > 0 && !prev.find(p => p.id === obj.id && p.z > 0)).length;
+      if (passed > 0) setScore((s: number) => s + passed);
+
+      return next;
+    });
+  });
+
+  return (
+    <>
+      <color attach="background" args={['#000000']} />
+      <fog attach="fog" args={['#000000', 10, 50]} />
+      
+      <ambientLight intensity={0.2} />
+      <pointLight position={[10, 10, 10]} intensity={1} />
+      <spotLight position={[0, 10, 0]} angle={0.3} penumbra={1} intensity={2} castShadow />
+
+      <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
+
+      <MovingGrid />
+      <Player position={[playerX, 0.5, 0]} setGameOver={setGameOver} />
+
+      {obstacles.map(obj => (
+        <mesh key={obj.id} position={[obj.x, 0.75, obj.z]}>
+          <boxGeometry args={[1.5, 1.5, 1.5]} />
+          <meshStandardMaterial color="#ff0055" emissive="#ff0055" emissiveIntensity={5} />
+        </mesh>
+      ))}
+
+      {/* Visual Effects */}
+      <Float speed={2} rotationIntensity={0.5} floatIntensity={0.5}>
+        <mesh position={[-15, 5, -20]}>
+          <torusKnotGeometry args={[3, 1, 100, 16]} />
+          <MeshDistortMaterial color="#ff00ff" speed={2} distort={0.4} />
+        </mesh>
+      </Float>
+      
+      <Float speed={3} rotationIntensity={1} floatIntensity={1}>
+        <mesh position={[15, 8, -25]}>
+          <sphereGeometry args={[2, 32, 32]} />
+          <MeshDistortMaterial color="#00ffff" speed={3} distort={0.6} />
+        </mesh>
+      </Float>
+    </>
+  );
+}
+
+export default function App() {
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [gameOver, setGameOver] = useState(false);
+  const [score, setScore] = useState(0);
+  const [highScore, setHighScore] = useState(0);
+
+  const startGame = () => {
+    setIsPlaying(true);
+    setGameOver(false);
+    setScore(0);
+  };
+
+  const handleGameOver = (v: boolean) => {
+    if (v) {
+      setIsPlaying(false);
+      setGameOver(true);
+      if (score > highScore) setHighScore(score);
+    }
+  };
+
+  return (
+    <div className="relative w-full h-screen bg-black overflow-hidden font-sans text-white">
+      {/* Game Canvas */}
+      <Canvas shadows>
+        <PerspectiveCamera makeDefault position={[0, 5, 10]} fov={50} />
+        <OrbitControls enableZoom={false} enablePan={false} maxPolarAngle={Math.PI / 2.1} minPolarAngle={Math.PI / 4} />
+        <GameScene 
+          isPlaying={isPlaying} 
+          score={score} 
+          setScore={setScore} 
+          setGameOver={handleGameOver} 
+        />
+      </Canvas>
+
+      {/* UI Overlay */}
+      <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-between p-8">
+        {/* Header */}
+        <div className="w-full flex justify-between items-start">
+          <div className="bg-black/50 backdrop-blur-md border border-cyan-500/30 p-4 rounded-2xl">
+            <p className="text-xs uppercase tracking-widest text-cyan-400 mb-1">Score</p>
+            <p className="text-4xl font-black text-white tabular-nums">{score}</p>
+          </div>
+          <div className="bg-black/50 backdrop-blur-md border border-fuchsia-500/30 p-4 rounded-2xl text-right">
+            <p className="text-xs uppercase tracking-widest text-fuchsia-400 mb-1">High Score</p>
+            <p className="text-4xl font-black text-white tabular-nums">{highScore}</p>
+          </div>
+        </div>
+
+        {/* Start Screen */}
+        <AnimatePresence>
+          {!isPlaying && !gameOver && (
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 1.1 }}
+              className="pointer-events-auto flex flex-col items-center"
+            >
+              <h1 className="text-8xl font-black italic uppercase tracking-tighter mb-8 text-transparent bg-clip-text bg-gradient-to-b from-cyan-400 to-fuchsia-600 drop-shadow-[0_0_30px_rgba(0,255,255,0.5)]">
+                NEON GRID
+              </h1>
+              <button 
+                onClick={startGame}
+                className="group relative px-12 py-6 bg-white text-black font-black text-2xl uppercase tracking-widest rounded-full overflow-hidden transition-transform hover:scale-105 active:scale-95"
+              >
+                <span className="relative z-10 flex items-center gap-3">
+                  <Play fill="black" /> Start Mission
+                </span>
+                <div className="absolute inset-0 bg-gradient-to-r from-cyan-400 to-fuchsia-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+              </button>
+              <div className="mt-12 flex gap-8 text-cyan-400/50 uppercase text-xs tracking-[0.3em]">
+                <div className="flex items-center gap-2"><ArrowLeft size={16} /> Move Left</div>
+                <div className="flex items-center gap-2">Move Right <ArrowRight size={16} /></div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Game Over Screen */}
+        <AnimatePresence>
+          {gameOver && (
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="pointer-events-auto flex flex-col items-center bg-black/80 backdrop-blur-xl p-12 rounded-[3rem] border border-white/10 shadow-2xl"
+            >
+              <Trophy className="text-yellow-400 mb-4" size={64} />
+              <h2 className="text-5xl font-black uppercase tracking-tighter mb-2">Mission Failed</h2>
+              <p className="text-white/50 mb-8">You survived the grid for {score} cycles.</p>
+              
+              <div className="flex gap-4">
+                <button 
+                  onClick={startGame}
+                  className="flex items-center gap-3 px-8 py-4 bg-cyan-500 text-black font-bold uppercase tracking-widest rounded-2xl hover:bg-cyan-400 transition-colors"
+                >
+                  <RotateCcw size={20} /> Retry
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Footer */}
+        <div className="w-full flex justify-center">
+          <p className="text-[10px] uppercase tracking-[0.5em] text-white/20">
+            Powered by Google AI Studio & Three.js
+          </p>
+        </div>
+      </div>
+
+      {/* Scanline Effect */}
+      <div className="absolute inset-0 pointer-events-none bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[length:100%_2px,3px_100%] z-50" />
+    </div>
+  );
+}
