@@ -1,0 +1,5 @@
+{
+  "name": "Neon Grid Runner",
+  "description": "A fast-paced 3D neon-themed arcade game built with React Three Fiber.",
+  "requestFramePermissions": []
+}
